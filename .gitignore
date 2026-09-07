@@ -16,3 +16,4 @@ ENV/
 .pinecone_env
 vector_database/pincone_database/.pinecone_env
 vector_database/.pinecone_env/
+all_env_configrations/

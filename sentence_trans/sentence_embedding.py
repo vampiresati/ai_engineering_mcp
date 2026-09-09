@@ -9,6 +9,7 @@ sentences = [
     "It's so sunny outside!",
     "He drove to the stadium.",
     "The weather is lovely today.",
+    "The weather was hot yesterday.",
 ]
 
 # 2. Calculate embeddings by calling model.encode()

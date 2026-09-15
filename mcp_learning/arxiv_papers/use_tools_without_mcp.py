@@ -11,13 +11,13 @@ response = chat(
     messages=[
         {
             "role": "user",
-            "content": "Find 50 papers about GraphRAG"
+            "content": "Find for paper id 2609.15922v1 directories"
         }
     ],
     tools=tools
 )
-print('response')
-print(response)
+# print('response')
+# print(response)
 
 
 if response.message.tool_calls:
@@ -28,5 +28,5 @@ if response.message.tool_calls:
         print("Arguments:", arguments)
         function = mapping_tool_function[tool_name]
         result = function(**arguments)
-
+#
         print("Result:", result)

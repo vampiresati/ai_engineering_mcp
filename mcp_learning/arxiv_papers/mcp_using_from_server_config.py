@@ -1,5 +1,6 @@
 import asyncio
 import json
+from pathlib import Path
 from contextlib import AsyncExitStack
 from typing import Any, Dict, List, TypedDict
 
@@ -19,42 +20,123 @@ from langchain_core.messages import (
 from pydantic import BaseModel, create_model
 
 
+# ============================================================
+# Load environment
+# ============================================================
+
 load_dotenv()
+
+
+# ============================================================
+# MCP Tool Definition
+# ============================================================
 
 class ToolDefinition(TypedDict):
     name: str
     description: str
     input_schema: dict
 
+
+# ============================================================
+# MCP ChatBot
+# ============================================================
+
 class MCP_ChatBot:
+
     def __init__(self):
+
+        # ----------------------------------------------------
+        # MCP sessions
+        # ----------------------------------------------------
+
         self.sessions: List[ClientSession] = []
+
+        # ----------------------------------------------------
+        # Async cleanup manager
+        # ----------------------------------------------------
+
         self.exit_stack = AsyncExitStack()
+
+        # ----------------------------------------------------
+        # Local Ollama model
+        # ----------------------------------------------------
+
         self.llm = ChatOllama(
             model="qwen2.5-coder:7b",
             temperature=0,
         )
+
+        # ----------------------------------------------------
+        # All MCP tools exposed to LangChain
+        # ----------------------------------------------------
+
         self.available_tools: List[StructuredTool] = []
+
+        # ----------------------------------------------------
+        # Mapping:
+        #
+        # MCP tool name
+        #       ↓
+        # MCP session
+        #
+        # Example:
+        #
+        # search_papers → arxiv session
+        # read_file    → filesystem session
+        # fetch        → fetch session
+        # ----------------------------------------------------
+
         self.tool_to_session: Dict[str, ClientSession] = {}
+
+        # ----------------------------------------------------
+        # Store original MCP schemas
+        # ----------------------------------------------------
+
         self.tool_schemas: Dict[str, dict] = {}
 
-    def json_type_to_python(self, property_schema: dict):
-        property_type = property_schema.get("type","string")
+    # ========================================================
+    # Convert JSON Schema → Python Type
+    # ========================================================
+
+    def json_type_to_python(
+        self,
+        property_schema: dict
+    ):
+
+        property_type = property_schema.get(
+            "type",
+            "string"
+        )
+
         if property_type == "string":
             return str
+
         elif property_type == "integer":
             return int
+
         elif property_type == "number":
             return float
+
         elif property_type == "boolean":
             return bool
+
         elif property_type == "array":
             return list
+
         elif property_type == "object":
             return dict
+
         return Any
 
-    def create_args_schema(self,tool_name: str,input_schema: dict):
+    # ========================================================
+    # Create Dynamic Pydantic Arguments Schema
+    # ========================================================
+
+    def create_args_schema(
+        self,
+        tool_name: str,
+        input_schema: dict
+    ):
 
         properties = input_schema.get(
             "properties",
@@ -68,6 +150,10 @@ class MCP_ChatBot:
 
         fields = {}
 
+        # ----------------------------------------------------
+        # Convert MCP JSON schema into Pydantic fields
+        # ----------------------------------------------------
+
         for property_name, property_schema in properties.items():
 
             python_type = self.json_type_to_python(
@@ -79,6 +165,7 @@ class MCP_ChatBot:
                 ""
             )
 
+            # Required argument
             if property_name in required:
 
                 fields[property_name] = (
@@ -86,6 +173,7 @@ class MCP_ChatBot:
                     ...
                 )
 
+            # Optional argument
             else:
 
                 fields[property_name] = (
@@ -115,9 +203,8 @@ class MCP_ChatBot:
 
         return ArgsModel
 
-
     # ========================================================
-    # Connect to one MCP server
+    # Connect to ONE MCP Server
     # ========================================================
 
     async def connect_to_server(
@@ -175,7 +262,7 @@ class MCP_ChatBot:
             self.sessions.append(session)
 
             # ------------------------------------------------
-            # Get tools
+            # Get tools from MCP server
             # ------------------------------------------------
 
             response = await session.list_tools()
@@ -192,7 +279,7 @@ class MCP_ChatBot:
             )
 
             # ------------------------------------------------
-            # Register every tool
+            # Register every MCP tool
             # ------------------------------------------------
 
             for mcp_tool in tools:
@@ -205,7 +292,16 @@ class MCP_ChatBot:
                 )
 
                 input_schema = (
-                    mcp_tool.inputSchema
+                    getattr(
+                        mcp_tool,
+                        "input_schema",
+                        None
+                    )
+                    or getattr(
+                        mcp_tool,
+                        "inputSchema",
+                        None
+                    )
                     or {}
                 )
 
@@ -235,12 +331,7 @@ class MCP_ChatBot:
                 )
 
                 # --------------------------------------------
-                # Create async function
-                #
-                # IMPORTANT:
-                # tool_name and session are captured using
-                # default arguments so each tool keeps its
-                # own MCP server/tool.
+                # Create async wrapper
                 # --------------------------------------------
 
                 async def call_mcp_tool(
@@ -264,16 +355,12 @@ class MCP_ChatBot:
                         arguments=kwargs
                     )
 
-                    # ----------------------------------------
-                    # Convert MCP result to string
-                    # ----------------------------------------
-
                     return self.format_mcp_result(
                         result
                     )
 
                 # --------------------------------------------
-                # Create LangChain StructuredTool
+                # Convert MCP tool into LangChain tool
                 # --------------------------------------------
 
                 langchain_tool = StructuredTool.from_function(
@@ -298,9 +385,8 @@ class MCP_ChatBot:
                 repr(e)
             )
 
-
     # ========================================================
-    # Format MCP result
+    # Format MCP Result
     # ========================================================
 
     def format_mcp_result(
@@ -346,9 +432,8 @@ class MCP_ChatBot:
 
             return str(result)
 
-
     # ========================================================
-    # Connect to all MCP servers
+    # Connect to ALL MCP Servers
     # ========================================================
 
     async def connect_to_servers(self):
@@ -359,8 +444,17 @@ class MCP_ChatBot:
 
         try:
 
+            # ------------------------------------------------
+            # Read configuration
+            # ------------------------------------------------
+
+            config_path = (
+                Path(__file__).resolve().parent
+                / "server_config.json"
+            )
+
             with open(
-                "server_config.json",
+                config_path,
                 "r"
             ) as file:
 
@@ -430,9 +524,8 @@ class MCP_ChatBot:
 
             raise
 
-
     # ========================================================
-    # Process user query
+    # Process User Query
     # ========================================================
 
     async def process_query(
@@ -441,7 +534,7 @@ class MCP_ChatBot:
     ):
 
         # ----------------------------------------------------
-        # Initial messages
+        # Initial conversation
         # ----------------------------------------------------
 
         messages = [
@@ -476,7 +569,7 @@ IMPORTANT:
         ]
 
         # ----------------------------------------------------
-        # Bind MCP tools to Qwen
+        # Bind all MCP tools to Qwen
         # ----------------------------------------------------
 
         llm_with_tools = self.llm.bind_tools(
@@ -498,7 +591,7 @@ IMPORTANT:
             )
 
             # ------------------------------------------------
-            # Add Qwen response to conversation
+            # Add Qwen response
             # ------------------------------------------------
 
             messages.append(
@@ -522,23 +615,19 @@ IMPORTANT:
                 break
 
             # ------------------------------------------------
-            # Qwen requested one or more tools
+            # Qwen requested tools
             # ------------------------------------------------
 
             for tool_call in response.tool_calls:
 
                 tool_name = tool_call["name"]
 
-                tool_args = (
-                    tool_call.get(
-                        "args",
-                        {}
-                    )
+                tool_args = tool_call.get(
+                    "args",
+                    {}
                 )
 
-                tool_call_id = (
-                    tool_call["id"]
-                )
+                tool_call_id = tool_call["id"]
 
                 print(
                     "\n--------------------------------"
@@ -648,16 +737,15 @@ IMPORTANT:
             # ------------------------------------------------
             # Continue loop
             #
-            # Qwen now receives the tool result and can:
+            # Qwen receives tool results and can:
             #
             # 1. Call another tool
             # 2. Call multiple tools
             # 3. Give final answer
             # ------------------------------------------------
 
-
     # ========================================================
-    # Interactive chat loop
+    # Interactive Chat Loop
     # ========================================================
 
     async def chat_loop(self):
@@ -715,7 +803,6 @@ IMPORTANT:
                 ).strip()
 
                 if not query:
-
                     continue
 
                 if query.lower() == "quit":
@@ -730,7 +817,7 @@ IMPORTANT:
                     query
                 )
 
-            except KeyboardInterrupt:
+            except (KeyboardInterrupt, EOFError):
 
                 print(
                     "\n\nExiting..."
@@ -747,7 +834,6 @@ IMPORTANT:
                 print(
                     repr(e)
                 )
-
 
     # ========================================================
     # Cleanup
@@ -782,15 +868,34 @@ async def main():
 
         await chatbot.connect_to_servers()
 
-        print("\n========== REGISTERED TOOLS ==========")
+        # ----------------------------------------------------
+        # Show registered tools
+        # ----------------------------------------------------
+
+        print(
+            "\n========== REGISTERED TOOLS =========="
+        )
 
         for tool in chatbot.available_tools:
-             print("\nNAME:", tool.name)
-             print("DESCRIPTION:", tool.description)
-             print("ARGS:", tool.args)
 
-        print("\n=======================================")
+            print(
+                "\nNAME:",
+                tool.name
+            )
 
+            print(
+                "DESCRIPTION:",
+                tool.description
+            )
+
+            print(
+                "ARGS:",
+                tool.args
+            )
+
+        print(
+            "\n======================================="
+        )
 
         # ----------------------------------------------------
         # Start chatbot
@@ -808,10 +913,9 @@ async def main():
 
 
 # ============================================================
-# Entry point
+# Entry Point
 # ============================================================
 
 if __name__ == "__main__":
 
     asyncio.run(main())
-

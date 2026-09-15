@@ -11,6 +11,8 @@
       "command": "npx",
       "args": [
         "-y",
+        "--loglevel",
+        "silent",
         "@modelcontextprotocol/server-filesystem",
         "/home/satvir/Desktop",
         "/home/satvir/Downloads"

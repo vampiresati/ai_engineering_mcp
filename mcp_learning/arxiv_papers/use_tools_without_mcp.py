@@ -17,7 +17,6 @@ def execute_tool(tool_name,arguments):
     return result
 
 from ollama import chat
-
 response = chat(model="qwen3:4b",
             messages=[{
             "role": "user",

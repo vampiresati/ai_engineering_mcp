@@ -1,3 +1,4 @@
+
 import asyncio
 import json
 from pathlib import Path
@@ -73,17 +74,7 @@ class MCP_ChatBot:
         self.available_tools: List[StructuredTool] = []
 
         # ----------------------------------------------------
-        # Mapping:
-        #
-        # MCP tool name
-        #       ↓
-        # MCP session
-        #
-        # Example:
-        #
-        # search_papers → arxiv session
-        # read_file    → filesystem session
-        # fetch        → fetch session
+        # MCP tool name -> MCP session
         # ----------------------------------------------------
 
         self.tool_to_session: Dict[str, ClientSession] = {}
@@ -95,7 +86,7 @@ class MCP_ChatBot:
         self.tool_schemas: Dict[str, dict] = {}
 
     # ========================================================
-    # Convert JSON Schema → Python Type
+    # Convert JSON Schema -> Python Type
     # ========================================================
 
     def json_type_to_python(
@@ -402,19 +393,11 @@ class MCP_ChatBot:
 
             for content in contents:
 
-                # --------------------------------------------
-                # Text content
-                # --------------------------------------------
-
                 if hasattr(content, "text"):
 
                     output.append(
                         content.text
                     )
-
-                # --------------------------------------------
-                # Other MCP content
-                # --------------------------------------------
 
                 else:
 
@@ -423,7 +406,6 @@ class MCP_ChatBot:
                     )
 
             if output:
-
                 return "\n".join(output)
 
             return str(result)
@@ -525,6 +507,183 @@ class MCP_ChatBot:
             raise
 
     # ========================================================
+    # Execute MCP Tool
+    # ========================================================
+
+    async def execute_mcp_tool(
+        self,
+        tool_name: str,
+        tool_args: dict
+    ) -> str:
+
+        print(
+            "\n--------------------------------"
+        )
+
+        print(
+            "Executing MCP tool"
+        )
+
+        print(
+            f"Name: {tool_name}"
+        )
+
+        print(
+            f"Arguments: {tool_args}"
+        )
+
+        print(
+            "--------------------------------"
+        )
+
+        # ----------------------------------------------------
+        # Find MCP session
+        # ----------------------------------------------------
+
+        session = self.tool_to_session.get(
+            tool_name
+        )
+
+        if session is None:
+
+            return (
+                f"Tool '{tool_name}' "
+                f"was not found."
+            )
+
+        try:
+
+            # ------------------------------------------------
+            # Call MCP server
+            # ------------------------------------------------
+
+            result = await session.call_tool(
+                tool_name,
+                arguments=tool_args
+            )
+
+            result_text = (
+                self.format_mcp_result(
+                    result
+                )
+            )
+
+            print(
+                "\n[MCP] Tool result:"
+            )
+
+            print(
+                result_text
+            )
+
+            return result_text
+
+        except Exception as e:
+
+            error_message = (
+                f"Error executing tool "
+                f"'{tool_name}': "
+                f"{str(e)}"
+            )
+
+            print(
+                error_message
+            )
+
+            return error_message
+
+    # ========================================================
+    # Parse Qwen Text Tool Call
+    # ========================================================
+
+    def parse_text_tool_call(
+        self,
+        content: Any
+    ):
+
+        # ----------------------------------------------------
+        # Convert content to string
+        # ----------------------------------------------------
+
+        if not isinstance(content, str):
+
+            return None
+
+        text = content.strip()
+
+        if not text:
+            return None
+
+        # ----------------------------------------------------
+        # Remove markdown code fences if Qwen adds them
+        # ----------------------------------------------------
+
+        if text.startswith("```"):
+
+            lines = text.splitlines()
+
+            if len(lines) >= 3:
+
+                lines = lines[1:]
+
+                if lines[-1].strip().startswith("```"):
+                    lines = lines[:-1]
+
+                text = "\n".join(lines).strip()
+
+        # ----------------------------------------------------
+        # Try JSON
+        # ----------------------------------------------------
+
+        try:
+
+            data = json.loads(text)
+
+        except json.JSONDecodeError:
+
+            return None
+
+        # ----------------------------------------------------
+        # Expected format:
+        #
+        # {
+        #   "name": "fetch",
+        #   "arguments": {
+        #       "url": "..."
+        #   }
+        # }
+        # ----------------------------------------------------
+
+        if not isinstance(data, dict):
+            return None
+
+        tool_name = data.get("name")
+
+        tool_args = data.get(
+            "arguments",
+            {}
+        )
+
+        if not tool_name:
+            return None
+
+        if not isinstance(tool_args, dict):
+            return None
+
+        # ----------------------------------------------------
+        # Only accept tools actually exposed by MCP
+        # ----------------------------------------------------
+
+        if tool_name not in self.tool_to_session:
+
+            return None
+
+        return {
+            "name": tool_name,
+            "arguments": tool_args
+        }
+
+    # ========================================================
     # Process User Query
     # ========================================================
 
@@ -560,6 +719,11 @@ IMPORTANT:
 - If a tool can provide the information, use the tool.
 - After receiving a tool result, analyze it and answer
   the user's question.
+
+You have access to MCP tools through the tool-calling
+interface.
+
+When a tool is needed, call the appropriate tool.
 """
             ),
 
@@ -591,6 +755,34 @@ IMPORTANT:
             )
 
             # ------------------------------------------------
+            # DEBUG
+            # ------------------------------------------------
+
+            print(
+                "\n========== QWEN RESPONSE =========="
+            )
+
+            print(
+                "CONTENT:"
+            )
+
+            print(
+                response.content
+            )
+
+            print(
+                "\nTOOL CALLS:"
+            )
+
+            print(
+                response.tool_calls
+            )
+
+            print(
+                "==================================="
+            )
+
+            # ------------------------------------------------
             # Add Qwen response
             # ------------------------------------------------
 
@@ -598,110 +790,53 @@ IMPORTANT:
                 response
             )
 
-            # ------------------------------------------------
-            # No tool call
-            # ------------------------------------------------
+            # =================================================
+            # CASE 1:
+            # LangChain correctly detected tool call
+            # =================================================
 
-            if not response.tool_calls:
+            if response.tool_calls:
 
-                print(
-                    "\nQwen:"
-                )
+                for tool_call in response.tool_calls:
 
-                print(
-                    response.content
-                )
+                    tool_name = tool_call["name"]
 
-                break
-
-            # ------------------------------------------------
-            # Qwen requested tools
-            # ------------------------------------------------
-
-            for tool_call in response.tool_calls:
-
-                tool_name = tool_call["name"]
-
-                tool_args = tool_call.get(
-                    "args",
-                    {}
-                )
-
-                tool_call_id = tool_call["id"]
-
-                print(
-                    "\n--------------------------------"
-                )
-
-                print(
-                    "Tool requested:"
-                )
-
-                print(
-                    f"Name: {tool_name}"
-                )
-
-                print(
-                    f"Arguments: {tool_args}"
-                )
-
-                print(
-                    "--------------------------------"
-                )
-
-                # --------------------------------------------
-                # Find MCP session
-                # --------------------------------------------
-
-                session = (
-                    self.tool_to_session.get(
-                        tool_name
+                    tool_args = tool_call.get(
+                        "args",
+                        {}
                     )
-                )
 
-                if session is None:
+                    tool_call_id = tool_call["id"]
 
-                    error_message = (
-                        f"Tool '{tool_name}' "
-                        f"was not found."
+                    print(
+                        "\n--------------------------------"
                     )
 
                     print(
-                        error_message
+                        "Tool requested by Qwen"
                     )
 
-                    messages.append(
-                        ToolMessage(
-                            content=error_message,
-                            tool_call_id=tool_call_id
-                        )
+                    print(
+                        f"Name: {tool_name}"
                     )
 
-                    continue
-
-                # --------------------------------------------
-                # Execute MCP tool
-                # --------------------------------------------
-
-                try:
-
-                    result = await session.call_tool(
-                        tool_name,
-                        arguments=tool_args
+                    print(
+                        f"Arguments: {tool_args}"
                     )
+
+                    print(
+                        "--------------------------------"
+                    )
+
+                    # ----------------------------------------
+                    # Execute MCP tool
+                    # ----------------------------------------
 
                     result_text = (
-                        self.format_mcp_result(
-                            result
+                        await self.execute_mcp_tool(
+                            tool_name,
+                            tool_args
                         )
-                    )
-
-                    print(
-                        "\nTool result:"
-                    )
-
-                    print(
-                        result_text
                     )
 
                     # ----------------------------------------
@@ -715,34 +850,101 @@ IMPORTANT:
                         )
                     )
 
-                except Exception as e:
+                # --------------------------------------------
+                # Go back to Qwen
+                # --------------------------------------------
 
-                    error_message = (
-                        f"Error executing tool "
-                        f"'{tool_name}': "
-                        f"{str(e)}"
+                continue
+
+            # =================================================
+            # CASE 2:
+            # Qwen returned tool call as JSON TEXT
+            # =================================================
+
+            text_tool_call = (
+                self.parse_text_tool_call(
+                    response.content
+                )
+            )
+
+            if text_tool_call:
+
+                tool_name = text_tool_call["name"]
+
+                tool_args = text_tool_call["arguments"]
+
+                print(
+                    "\n================================"
+                )
+
+                print(
+                    "Qwen returned a TEXT tool call"
+                )
+
+                print(
+                    f"Tool: {tool_name}"
+                )
+
+                print(
+                    f"Arguments: {tool_args}"
+                )
+
+                print(
+                    "================================"
+                )
+
+                # --------------------------------------------
+                # Execute MCP tool
+                # --------------------------------------------
+
+                result_text = (
+                    await self.execute_mcp_tool(
+                        tool_name,
+                        tool_args
                     )
+                )
 
-                    print(
-                        error_message
-                    )
+                # --------------------------------------------
+                # IMPORTANT:
+                #
+                # Since this wasn't a native LangChain
+                # tool call, we send the result back as
+                # HumanMessage rather than ToolMessage.
+                # --------------------------------------------
 
-                    messages.append(
-                        ToolMessage(
-                            content=error_message,
-                            tool_call_id=tool_call_id
+                messages.append(
+                    HumanMessage(
+                        content=(
+                            f"MCP TOOL RESULT\n\n"
+                            f"Tool: {tool_name}\n\n"
+                            f"Result:\n"
+                            f"{result_text}\n\n"
+                            f"Now answer the user's original "
+                            f"question using this result."
                         )
                     )
+                )
 
-            # ------------------------------------------------
-            # Continue loop
-            #
-            # Qwen receives tool results and can:
-            #
-            # 1. Call another tool
-            # 2. Call multiple tools
-            # 3. Give final answer
-            # ------------------------------------------------
+                # --------------------------------------------
+                # Ask Qwen again
+                # --------------------------------------------
+
+                continue
+
+            # =================================================
+            # CASE 3:
+            # Normal final response
+            # =================================================
+
+            print(
+                "\nQwen:"
+            )
+
+            print(
+                response.content
+            )
+
+            break
 
     # ========================================================
     # Interactive Chat Loop
@@ -919,3 +1121,4 @@ async def main():
 if __name__ == "__main__":
 
     asyncio.run(main())
+

@@ -1,4 +1,3 @@
-
 import asyncio
 import json
 from pathlib import Path
@@ -77,13 +76,19 @@ class MCP_ChatBot:
         # MCP tool name -> MCP session
         # ----------------------------------------------------
 
-        self.tool_to_session: Dict[str, ClientSession] = {}
+        self.tool_to_session: Dict[
+            str,
+            ClientSession
+        ] = {}
 
         # ----------------------------------------------------
         # Store original MCP schemas
         # ----------------------------------------------------
 
-        self.tool_schemas: Dict[str, dict] = {}
+        self.tool_schemas: Dict[
+            str,
+            dict
+        ] = {}
 
     # ========================================================
     # Convert JSON Schema -> Python Type
@@ -331,23 +336,9 @@ class MCP_ChatBot:
                     **kwargs
                 ):
 
-                    print(
-                        f"\n[MCP] Calling: "
-                        f"{_tool_name}"
-                    )
-
-                    print(
-                        f"[MCP] Arguments: "
-                        f"{kwargs}"
-                    )
-
-                    result = await _session.call_tool(
+                    return await self.execute_mcp_tool(
                         _tool_name,
-                        arguments=kwargs
-                    )
-
-                    return self.format_mcp_result(
-                        result
+                        kwargs
                     )
 
                 # --------------------------------------------
@@ -406,6 +397,7 @@ class MCP_ChatBot:
                     )
 
             if output:
+
                 return "\n".join(output)
 
             return str(result)
@@ -593,17 +585,13 @@ class MCP_ChatBot:
             return error_message
 
     # ========================================================
-    # Parse Qwen Text Tool Call
+    # Parse Qwen JSON Tool Call
     # ========================================================
 
     def parse_text_tool_call(
         self,
         content: Any
     ):
-
-        # ----------------------------------------------------
-        # Convert content to string
-        # ----------------------------------------------------
 
         if not isinstance(content, str):
 
@@ -612,10 +600,11 @@ class MCP_ChatBot:
         text = content.strip()
 
         if not text:
+
             return None
 
         # ----------------------------------------------------
-        # Remove markdown code fences if Qwen adds them
+        # Remove markdown code fences
         # ----------------------------------------------------
 
         if text.startswith("```"):
@@ -627,12 +616,13 @@ class MCP_ChatBot:
                 lines = lines[1:]
 
                 if lines[-1].strip().startswith("```"):
+
                     lines = lines[:-1]
 
                 text = "\n".join(lines).strip()
 
         # ----------------------------------------------------
-        # Try JSON
+        # Try direct JSON
         # ----------------------------------------------------
 
         try:
@@ -641,23 +631,39 @@ class MCP_ChatBot:
 
         except json.JSONDecodeError:
 
-            return None
+            # ------------------------------------------------
+            # Sometimes the model adds text before/after JSON.
+            # Try extracting the first JSON object.
+            # ------------------------------------------------
+
+            start = text.find("{")
+            end = text.rfind("}")
+
+            if start == -1 or end == -1:
+
+                return None
+
+            try:
+
+                data = json.loads(
+                    text[start:end + 1]
+                )
+
+            except json.JSONDecodeError:
+
+                return None
 
         # ----------------------------------------------------
-        # Expected format:
-        #
-        # {
-        #   "name": "fetch",
-        #   "arguments": {
-        #       "url": "..."
-        #   }
-        # }
+        # Validate
         # ----------------------------------------------------
 
         if not isinstance(data, dict):
+
             return None
 
-        tool_name = data.get("name")
+        tool_name = data.get(
+            "name"
+        )
 
         tool_args = data.get(
             "arguments",
@@ -665,13 +671,18 @@ class MCP_ChatBot:
         )
 
         if not tool_name:
+
             return None
 
-        if not isinstance(tool_args, dict):
+        if not isinstance(
+            tool_args,
+            dict
+        ):
+
             return None
 
         # ----------------------------------------------------
-        # Only accept tools actually exposed by MCP
+        # Only accept tools that actually exist
         # ----------------------------------------------------
 
         if tool_name not in self.tool_to_session:
@@ -684,6 +695,68 @@ class MCP_ChatBot:
         }
 
     # ========================================================
+    # Detect Fetch Truncation
+    # ========================================================
+
+    def get_next_start_index(
+        self,
+        result_text: str
+    ):
+
+        if not isinstance(
+            result_text,
+            str
+        ):
+
+            return None
+
+        # Example:
+        #
+        # <error>Content truncated.
+        # Call the fetch tool with a start_index of 10000
+        # to get more content.</error>
+
+        marker = (
+            "start_index of "
+        )
+
+        if marker not in result_text:
+
+            return None
+
+        try:
+
+            after_marker = (
+                result_text.split(
+                    marker,
+                    1
+                )[1]
+            )
+
+            number = ""
+
+            for char in after_marker:
+
+                if char.isdigit():
+
+                    number += char
+
+                else:
+
+                    if number:
+                        break
+
+            if number:
+
+                return int(number)
+
+        except Exception:
+
+            pass
+
+        return None
+
+    # ========================================================
     # Process User Query
     # ========================================================
 
@@ -693,7 +766,7 @@ class MCP_ChatBot:
     ):
 
         # ----------------------------------------------------
-        # Initial conversation
+        # Conversation
         # ----------------------------------------------------
 
         messages = [
@@ -705,25 +778,48 @@ Ollama and Qwen.
 
 You are connected to multiple MCP servers.
 
-Available MCP capabilities may include:
+AVAILABLE MCP CAPABILITIES:
 
-1. Web fetching
-2. Local filesystem access
-3. arXiv paper search
-4. arXiv paper information extraction
+- Web fetching
+- Local filesystem access
+- arXiv paper search
+- arXiv paper information extraction
 
-IMPORTANT:
+IMPORTANT TOOL RULES:
 
-- Use MCP tools when they are required.
-- Do not invent tool results.
-- If a tool can provide the information, use the tool.
-- After receiving a tool result, analyze it and answer
-  the user's question.
+1. Use MCP tools when they are required.
 
-You have access to MCP tools through the tool-calling
-interface.
+2. Never invent tool results.
 
-When a tool is needed, call the appropriate tool.
+3. If the user asks you to fetch a URL,
+   use the fetch MCP tool.
+
+4. If a fetch result says that content is truncated
+   and provides a start_index, call fetch again with
+   that start_index.
+
+5. Continue fetching until enough information is
+   available to answer the user's original request.
+
+6. Do not treat a continuation of a fetched document
+   as a new user question.
+
+7. Preserve the user's original request throughout
+   the entire tool-calling process.
+
+8. After collecting enough information, answer the
+   original user request.
+
+9. If you need another tool, call it.
+
+10. When using text-based tool calls, output ONLY:
+
+{
+  "name": "tool_name",
+  "arguments": {
+    "argument": "value"
+  }
+}
 """
             ),
 
@@ -733,7 +829,7 @@ When a tool is needed, call the appropriate tool.
         ]
 
         # ----------------------------------------------------
-        # Bind all MCP tools to Qwen
+        # Bind MCP tools
         # ----------------------------------------------------
 
         llm_with_tools = self.llm.bind_tools(
@@ -741,13 +837,22 @@ When a tool is needed, call the appropriate tool.
         )
 
         # ----------------------------------------------------
-        # Tool calling loop
+        # Safety limit
+        #
+        # Prevent an infinite tool loop.
         # ----------------------------------------------------
 
-        while True:
+        max_iterations = 10
+
+        iteration = 0
+
+        while iteration < max_iterations:
+
+            iteration += 1
 
             print(
-                "\n[Qwen] Thinking..."
+                f"\n[Qwen] Thinking... "
+                f"(iteration {iteration})"
             )
 
             response = await llm_with_tools.ainvoke(
@@ -755,7 +860,7 @@ When a tool is needed, call the appropriate tool.
             )
 
             # ------------------------------------------------
-            # DEBUG
+            # Debug
             # ------------------------------------------------
 
             print(
@@ -792,28 +897,32 @@ When a tool is needed, call the appropriate tool.
 
             # =================================================
             # CASE 1:
-            # LangChain correctly detected tool call
+            # Native LangChain tool calls
             # =================================================
 
             if response.tool_calls:
 
                 for tool_call in response.tool_calls:
 
-                    tool_name = tool_call["name"]
+                    tool_name = tool_call.get(
+                        "name"
+                    )
 
                     tool_args = tool_call.get(
                         "args",
                         {}
                     )
 
-                    tool_call_id = tool_call["id"]
-
-                    print(
-                        "\n--------------------------------"
+                    tool_call_id = tool_call.get(
+                        "id"
                     )
 
                     print(
-                        "Tool requested by Qwen"
+                        "\n================================"
+                    )
+
+                    print(
+                        "NATIVE TOOL CALL"
                     )
 
                     print(
@@ -825,11 +934,11 @@ When a tool is needed, call the appropriate tool.
                     )
 
                     print(
-                        "--------------------------------"
+                        "================================"
                     )
 
                     # ----------------------------------------
-                    # Execute MCP tool
+                    # Execute MCP
                     # ----------------------------------------
 
                     result_text = (
@@ -840,7 +949,55 @@ When a tool is needed, call the appropriate tool.
                     )
 
                     # ----------------------------------------
-                    # Send result back to Qwen
+                    # Check for fetch pagination
+                    # ----------------------------------------
+
+                    next_start_index = (
+                        self.get_next_start_index(
+                            result_text
+                        )
+                    )
+
+                    if (
+                        next_start_index is not None
+                        and tool_name == "fetch"
+                    ):
+
+                        print(
+                            "\n[MCP] Fetch content truncated."
+                        )
+
+                        print(
+                            "[MCP] Next start_index:",
+                            next_start_index
+                        )
+
+                        # Tell Qwen to continue fetching.
+                        messages.append(
+                            HumanMessage(
+                                content=f"""
+The fetch MCP tool returned truncated content.
+
+The MCP server says to continue with:
+
+start_index = {next_start_index}
+
+Original user request:
+{query}
+
+Call the fetch tool again using the same URL and:
+
+start_index={next_start_index}
+
+Do not answer yet.
+"""
+                            )
+                        )
+
+                        continue
+
+                    # ----------------------------------------
+                    # Normal tool result
                     # ----------------------------------------
 
                     messages.append(
@@ -850,15 +1007,11 @@ When a tool is needed, call the appropriate tool.
                         )
                     )
 
-                # --------------------------------------------
-                # Go back to Qwen
-                # --------------------------------------------
-
                 continue
 
             # =================================================
             # CASE 2:
-            # Qwen returned tool call as JSON TEXT
+            # Qwen returned JSON tool call as TEXT
             # =================================================
 
             text_tool_call = (
@@ -869,20 +1022,24 @@ When a tool is needed, call the appropriate tool.
 
             if text_tool_call:
 
-                tool_name = text_tool_call["name"]
+                tool_name = (
+                    text_tool_call["name"]
+                )
 
-                tool_args = text_tool_call["arguments"]
+                tool_args = (
+                    text_tool_call["arguments"]
+                )
 
                 print(
                     "\n================================"
                 )
 
                 print(
-                    "Qwen returned a TEXT tool call"
+                    "TEXT TOOL CALL"
                 )
 
                 print(
-                    f"Tool: {tool_name}"
+                    f"Name: {tool_name}"
                 )
 
                 print(
@@ -894,7 +1051,7 @@ When a tool is needed, call the appropriate tool.
                 )
 
                 # --------------------------------------------
-                # Execute MCP tool
+                # Execute MCP
                 # --------------------------------------------
 
                 result_text = (
@@ -905,29 +1062,104 @@ When a tool is needed, call the appropriate tool.
                 )
 
                 # --------------------------------------------
-                # IMPORTANT:
-                #
-                # Since this wasn't a native LangChain
-                # tool call, we send the result back as
-                # HumanMessage rather than ToolMessage.
+                # Detect pagination
+                # --------------------------------------------
+
+                next_start_index = (
+                    self.get_next_start_index(
+                        result_text
+                    )
+                )
+
+                if (
+                    next_start_index is not None
+                    and tool_name == "fetch"
+                ):
+
+                    print(
+                        "\n[MCP] Content truncated."
+                    )
+
+                    print(
+                        "[MCP] Automatically continuing..."
+                    )
+
+                    print(
+                        "[MCP] Next start_index:",
+                        next_start_index
+                    )
+
+                    # ----------------------------------------
+                    # Preserve original URL
+                    # ----------------------------------------
+
+                    next_args = dict(
+                        tool_args
+                    )
+
+                    next_args[
+                        "start_index"
+                    ] = next_start_index
+
+                    messages.append(
+                        HumanMessage(
+                            content=f"""
+The MCP fetch tool returned truncated content.
+
+Continue the same fetch operation.
+
+Original user request:
+{query}
+
+Previous fetch arguments:
+{json.dumps(tool_args, indent=2)}
+
+The MCP server requested:
+
+start_index = {next_start_index}
+
+Call the fetch tool again with:
+
+{json.dumps(next_args, indent=2)}
+
+Do not provide the final answer yet.
+"""
+                        )
+                    )
+
+                    continue
+
+                # --------------------------------------------
+                # Normal text-tool result
                 # --------------------------------------------
 
                 messages.append(
                     HumanMessage(
-                        content=(
-                            f"MCP TOOL RESULT\n\n"
-                            f"Tool: {tool_name}\n\n"
-                            f"Result:\n"
-                            f"{result_text}\n\n"
-                            f"Now answer the user's original "
-                            f"question using this result."
-                        )
+                        content=f"""
+MCP TOOL RESULT
+
+Original user request:
+{query}
+
+Tool:
+{tool_name}
+
+Arguments:
+{json.dumps(tool_args, indent=2)}
+
+Result:
+{result_text}
+
+Continue working on the ORIGINAL USER REQUEST.
+
+If more MCP information is required, call another
+MCP tool.
+
+If enough information is available, provide the
+final answer directly to the user.
+"""
                     )
                 )
-
-                # --------------------------------------------
-                # Ask Qwen again
-                # --------------------------------------------
 
                 continue
 
@@ -945,6 +1177,20 @@ When a tool is needed, call the appropriate tool.
             )
 
             break
+
+        else:
+
+            print(
+                "\n[WARNING]"
+            )
+
+            print(
+                "Maximum tool iterations reached."
+            )
+
+            print(
+                "The model may be stuck in a tool-calling loop."
+            )
 
     # ========================================================
     # Interactive Chat Loop
@@ -1019,7 +1265,10 @@ When a tool is needed, call the appropriate tool.
                     query
                 )
 
-            except (KeyboardInterrupt, EOFError):
+            except (
+                KeyboardInterrupt,
+                EOFError
+            ):
 
                 print(
                     "\n\nExiting..."
@@ -1106,10 +1355,6 @@ async def main():
         await chatbot.chat_loop()
 
     finally:
-
-        # ----------------------------------------------------
-        # Cleanup
-        # ----------------------------------------------------
 
         await chatbot.cleanup()
 

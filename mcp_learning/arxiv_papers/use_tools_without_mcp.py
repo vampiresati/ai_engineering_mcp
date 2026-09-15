@@ -11,7 +11,7 @@ response = chat(
     messages=[
         {
             "role": "user",
-            "content": "Find 1 papers about GraphRAG"
+            "content": "Find 50 papers about GraphRAG"
         }
     ],
     tools=tools

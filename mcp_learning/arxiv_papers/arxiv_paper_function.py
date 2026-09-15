@@ -66,23 +66,45 @@ def create_directory_about_the_paper(PAPER_DIR,topic,papers):
             json.dump(papers_info, json_file, indent=2)
         print(f"Results are saved in: {file_path}")
     return paper_ids
-def search_papers(topic="mcp",max_results=5):
-    """
-    Search for papers on arXiv based on a topic and store their information.
-    Args:
-        topic: The topic to search for
-        max_results: Maximum number of results to retrieve (default: 5)
-    Returns:
-        List of paper IDs found in the search
-    """
-    client = arxiv.Client()
-    search = arxiv.Search(query = topic,max_results = max_results,sort_by = arxiv.SortCriterion.SubmittedDate)
+def search_papers(topic: str, max_results: int = 5):
+    print(f"Searching arXiv: {topic}")
+    print(f"Maximum results: {max_results}")
+    search = arxiv.Search(
+        query=topic,
+        max_results=max_results,
+        sort_by=arxiv.SortCriterion.SubmittedDate,
+        sort_order=arxiv.SortOrder.Descending
+    )
+
+    client = arxiv.Client(
+        page_size=max_results,
+        delay_seconds=3,
+        num_retries=1
+    )
+
     papers = client.results(search)
-    #for paper in papers:
-    #    print_detail_about_paper(paper)
-    paper_ids=create_directory_about_the_paper(PAPER_DIR,topic,papers)
-    print(paper_ids)
-    return paper_ids
+
+    try:
+
+        paper_ids = create_directory_about_the_paper(
+            PAPER_DIR,
+            topic,
+            papers
+        )
+
+        return {
+            "success": True,
+            "paper_ids": paper_ids
+        }
+
+    except arxiv.HTTPError as e:
+
+        return {
+            "success": False,
+            "error": "arXiv API rate limit (HTTP 429)",
+            "message": str(e)
+        }
 if __name__=="__main__":
-#   paper_ids=search_papers("mcp",2)
-    print(extract_info("2609.15906v1"))
+  paper_ids=search_papers("mcp",5)
+  print(paper_ids)
+#     print(extract_info("2609.15906v1"))

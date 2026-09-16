@@ -1,16 +1,21 @@
 import arxiv
 import json
 import os
-from typing import List
 from dotenv import load_dotenv
 from fastmcp import FastMCP
 
 
 load_dotenv()
 
-mcp = FastMCP("Research")
+from fastmcp.server.auth.providers.keycloak import KeycloakAuthProvider
+auth = KeycloakAuthProvider(
+    realm_url="http://localhost:8080/realms/mcp-realm",
+    base_url="http://localhost:8000",
+)
 
-PAPER_DIR = "papers"
+mcp = FastMCP("Research", auth=auth)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PAPER_DIR = os.path.join(BASE_DIR, "papers")
 
 
 # ============================================================
@@ -91,6 +96,12 @@ def extract_info(paper_id: str) -> str:
     Returns:
         JSON string with paper information if found.
     """
+
+    if not os.path.exists(PAPER_DIR):
+        return (
+            f"There's no saved information "
+            f"related to paper {paper_id}."
+        )
 
     for item in os.listdir(PAPER_DIR):
 

@@ -23,7 +23,7 @@
       "command": "uv",
       "args": [
         "run",
-        "arxiv_papers_mcp_server.py"
+        "arxiv_papers/arxiv_papers_mcp_server.py"
       ]
     }
   }
